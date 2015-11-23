@@ -1,36 +1,27 @@
-import random
-
-from django.core.urlresolvers import reverse
 from django.db import models
 from django.core.serializers.json import DjangoJSONEncoder
 from django.conf import settings
-from django.utils import simplejson as json
 from django.utils.safestring import mark_safe
 
 from jsonfield import JSONField
-from multiselectfield import MultiSelectField
 
 import waffle
 from waffle.models import Flag
 
-from experiments import conf
+import random
+import json
+
 from experiments.dateutils import now
+from experiments import conf
 
 
-CONTROL_STATE = 0  # The experiment is essentially disabled.
-                   # All users will see the control alternative, and no data
-                   # will be collected.
-ENABLED_STATE = 1  # The experiment is enabled globally, for all users.
-SWITCH_STATE = 2   # If a switch_key is specified, the experiment will rely on
-                   # the switch/flag to determine if the user is included in
-                   # the experiment.
-TRACK_STATE = 3    # The experiment is enabled globally,
-                   # but no new users are accepted.
+CONTROL_STATE = 0
+ENABLED_STATE = 1
+TRACK_STATE = 3
 
 STATES = (
-    (CONTROL_STATE, 'Control'),
+    (CONTROL_STATE, 'Default/Control'),
     (ENABLED_STATE, 'Enabled'),
-    (SWITCH_STATE, 'Switch'),
     (TRACK_STATE, 'Track'),
 )
 
@@ -38,19 +29,19 @@ STATES = (
 class Experiment(models.Model):
     name = models.CharField(
         primary_key=True, max_length=128,
-        help_text='The experiment name.')
+        help_text='The experiment name')
     description = models.TextField(
         default="", blank=True, null=True,
-        help_text='A brief description of this experiment.')
+        help_text='A brief description of this experiment')
     alternatives = JSONField(default={}, blank=True)
-    relevant_chi2_goals = MultiSelectField(
+    relevant_chi2_goals = models.TextField(
         default="", null=True, blank=True,
         choices=((goal, goal) for goal in conf.ALL_GOALS),
         verbose_name='Chi-squared test',
         help_text=mark_safe(
             '<a href="http://en.wikipedia.org/wiki/Chi-squared_test" '
             'target="_blank">Used when optimising for conversion rate.</a>'))
-    relevant_mwu_goals = MultiSelectField(
+    relevant_mwu_goals = models.TextField(
         default="", null=True, blank=True,
         choices=((goal, goal) for goal in conf.ALL_GOALS),
         verbose_name='Mann-Whitney U',
@@ -58,12 +49,11 @@ class Experiment(models.Model):
             '<a href="http://en.wikipedia.org/wiki/Mann%E2%80%93Whitney_U" '
             'target="_blank">Used when optimising for number of times '
             'users perform an action. (Advanced)</a>'))
-    switch_key = models.CharField(
-        default="", max_length=50, null=True, blank=True,
-        help_text='Connected to a feature switch. (Optional)')
+    relevant_chi2_goals = models.TextField(default="", null=True, blank=True)
+    relevant_mwu_goals = models.TextField(default="", null=True, blank=True)
+
     state = models.IntegerField(default=CONTROL_STATE, choices=STATES)
-    start_date = models.DateTimeField(
-        default=now, blank=True, null=True, db_index=True)
+    start_date = models.DateTimeField(default=now, blank=True, null=True, db_index=True)
     end_date = models.DateTimeField(blank=True, null=True)
 
     @staticmethod
@@ -74,24 +64,22 @@ class Experiment(models.Model):
     def is_displaying_alternatives(self):
         if self.state == CONTROL_STATE:
             return False
-        if self.state == ENABLED_STATE:
+        elif self.state == ENABLED_STATE:
             return True
-        if self.state == SWITCH_STATE:
+        elif self.state == TRACK_STATE:
             return True
-        if self.state == TRACK_STATE:
-            return True
-        raise Exception("Invalid experiment state %s!" % self.state)
+        else:
+            raise Exception("Invalid experiment state %s!" % self.state)
 
-    def is_accepting_new_users(self, request):
+    def is_accepting_new_users(self):
         if self.state == CONTROL_STATE:
             return False
-        if self.state == ENABLED_STATE:
+        elif self.state == ENABLED_STATE:
             return True
-        if self.state == SWITCH_STATE:
+        elif self.state == TRACK_STATE:
             return waffle.flag_is_active(request, self.switch_key)
-        if self.state == TRACK_STATE:
-            return False
-        raise Exception("Invalid experiment state %s!" % self.state)
+        else:
+            raise Exception("Invalid experiment state %s!" % self.state)
 
     @property
     def switch(self):
@@ -107,17 +95,29 @@ class Experiment(models.Model):
             self.alternatives[alternative] = {}
             self.alternatives[alternative]['enabled'] = True
             self.save()
-        if (weight is not None
-                and 'weight' not in self.alternatives[alternative]):
+        if weight is not None and 'weight' not in self.alternatives[alternative]:
             self.alternatives[alternative]['weight'] = float(weight)
             self.save()
 
+    @property
+    def default_alternative(self):
+        for alternative, alternative_conf in self.alternatives.iteritems():
+            if alternative_conf.get('default'):
+                return alternative
+        return conf.CONTROL_GROUP
+
+    def set_default_alternative(self, alternative):
+        for alternative_name, alternative_conf in self.alternatives.iteritems():
+            if alternative_name == alternative:
+                alternative_conf['default'] = True
+            elif 'default' in alternative_conf:
+                del alternative_conf['default']
+
     def random_alternative(self):
         if all('weight' in alt for alt in self.alternatives.values()):
-            return weighted_choice(
-                [(name, details['weight'])
-                 for name, details in self.alternatives.items()])
-        return random.choice(self.alternatives.keys())
+            return weighted_choice([(name, details['weight']) for name, details in self.alternatives.items()])
+        else:
+            return random.choice(self.alternatives.keys())
 
     def increment_participant_count(self, alternative_name,
                                     participant_identifier):
@@ -170,10 +170,11 @@ class Experiment(models.Model):
             'start_date': self.start_date,
             'end_date': self.end_date,
             'state': self.state,
-            'switch_key': self.switch_key,
             'description': self.description,
             'relevant_chi2_goals': self.relevant_chi2_goals,
             'relevant_mwu_goals': self.relevant_mwu_goals,
+            'default_alternative': self.default_alternative,
+            'alternatives': ','.join(self.alternatives.keys()),
         }
         return data
 
@@ -216,8 +217,7 @@ class Experiment(models.Model):
 
 class Enrollment(models.Model):
     """ A participant in a split testing experiment """
-    user = models.ForeignKey(
-        getattr(settings, 'AUTH_USER_MODEL', 'auth.User'), null=True)
+    user = models.ForeignKey(getattr(settings, 'AUTH_USER_MODEL', 'auth.User'))
     experiment = models.ForeignKey(Experiment)
     enrollment_date = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(null=True)
@@ -228,16 +228,6 @@ class Enrollment(models.Model):
 
     def __unicode__(self):
         return u'%s - %s' % (self.user, self.experiment)
-
-    def to_dict(self):
-        data = {
-            'user': self.user,
-            'experiment': self.experiment,
-            'enrollment_date': self.enrollment_date,
-            'alternative': self.alternative,
-            'goals': self.goals,
-        }
-        return data
 
 
 def weighted_choice(choices):

@@ -1,20 +1,53 @@
 Django-Experiments
 ==================
 
-Django-Experiments is an AB Testing Framework for Django. It is
-completely usable via template tags. It provides support for conditional
-user enrollment via django-waffle.
+Django-Experiments is an AB Testing Framework for Django.
+
+It is possible to set up an experiment through template tags only.
+Through the Django admin you can monitor and control experiment progress.
 
 If you don't know what AB testing is, check out `wikipedia <http://en.wikipedia.org/wiki/A/B_testing>`_.
 
-* This version is based on `Mixcloud Django-Experiments <https://github.com/mixcloud/django-experiments>`_.
-
-.. image:: https://s3-eu-west-1.amazonaws.com/mixcloud-public/django-experiments/Screen+Shot+2014-09-03+at+2.20.32+PM.png
-
-.. image:: https://s3-eu-west-1.amazonaws.com/mixcloud-public/django-experiments/Screen+Shot+2014-09-03+at+2.20.47+PM.png
-
 Changelog
 ---------
+
+1.1.2.waffle
+~~~~~
+
+- Replaced Gargoyle by Django Waffle
+
+1.1.2
+~~~~~
+
+ - Updating migrations
+ - Documentation improvements
+ - Updating example app
+
+1.1.1
+~~~~~
+
+ - Fixing EXPERIMENTS_AUTO_CREATE flag (previously setting it to True did nothing)
+
+1.1.0
+~~~~~
+
+ - Nexus is no longer required or used - the standard Django admin for the Experiment model takes over the functionality previously provided by Nexus - NOTE this may have some backwards incompatibilities depending on how you included the media files
+ - Promote an experiment to a particular alternative (other than Control) through the admin
+ - New experiment_enroll assignment tag (see below)
+
+1.0.0
+~~~~~
+
+Bumping version to 1.0.0 because django-experiments is definitely production
+ready but also due to backwards incompatible changes that have been merged in.
+ - Django 1.7 and 1.8 support (including custom user models)
+ - Fixed numerous bugs to do with retention goals - before this update they are not trustworthy. See retention section below for more information.
+ - Fixed bug caused by the participant cache on request
+ - Fixed bugs related to confirm human and made the functionality pluggable
+ - Added "force_alternative" option to participant.enroll (important note: forcing the alternative in a non-random way will generate potentially invalid results)
+ - Removal of gargoyle integration and extra "request" parameters to methods that no longer need them such as is_enrolled (BACKWARDS INCOMPATIBLE CHANGE)
+ - ExperimentsMiddleware changed to ExperimentsRetentionMiddleware (BACKWARDS INCOMPATIBLE CHANGE)
+ - More tests and logging added
 
 0.3.5b
 ~~~~~~
@@ -78,17 +111,19 @@ pip is still the recommended way to install dependencies:
 Dependencies
 ------------
 - `Django <https://github.com/django/django/>`_
-- `Django Waffle <https://github.com/jsocol/django-waffle>`_
 - `Redis <http://redis.io/>`_
-- `jsonfield <https://github.com/bradjasper/django-jsonfield/>`_
+- `django-modeldict <https://github.com/disqus/django-modeldict>`_
+- `Django Waffle <https://github.com/jsocol/django-waffle>`_
 
 (Detailed list in requirements.txt)
+
+It also requires 'django.contrib.humanize' to be in INSTALLED_APPS.
 
 Usage
 -----
 
 The example project is a good place to get started and have a play.
-Results are stored in redis and displayed in the django admin. The key
+Results are stored in redis and displayed in the Django admin. The key
 components of this framework are: the experiments, alternatives and
 goals.
 
@@ -116,19 +151,29 @@ Next, activate the apps by adding them to your INSTALLED_APPS:
     #Installed Apps
     INSTALLED_APPS = [
         ...
+        'django.contrib.admin',
         'django.contrib.humanize',
         'waffle',
         'experiments',
     ]
 
-And add our middleware:
+Include 'django.contrib.humanize' as above if not already included. 
+
+Include the app URLconf in your urls.py file:
+
+    url(r'experiments/', include('experiments.urls')),
+
+We haven't configured our goals yet, we'll do that in a bit. Please ensure
+you have correctly configured your STATIC_URL setting.
+
+OPTIONAL:
+If you want to use the built in retention goals you will need to include the retention middleware:
 
 ::
 
-    #Middleware
     MIDDLEWARE_CLASSES = [
         ...
-        'experiments.middleware.ExperimentsMiddleware',
+        'experiments.middleware.ExperimentsRetentionMiddleware',
     ]
 
 Finally, the cache for the manager and Waffle:
@@ -161,10 +206,10 @@ Don't forget to include the module to your urls:
 Experiments and Alternatives
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The experiment is manually created in your django admin.\*
+The experiment can be manually created in your Django admin. Adding alternatives must currently be done in template tags or by calling the relevant code, as described below.
 
 An experiment allows you to test the effect of various design
-alternatives on user interaction. Django Experiments is designed to work
+alternatives on user interaction. Django-Experiments is designed to work
 from within django templates, to make it easier for designers. We begin
 by loading our module:
 
@@ -210,6 +255,18 @@ Make sure the experiment tag has access to the request object (not an
 issue for regular templates but you might have to manually add it
 inside an inclusion tag) or it will silently fail to work.
 
+The experiment_enroll assignment tag can also be used (note that it
+takes strings or variables unlike the older experiment tag):
+
+::
+
+     {% experiment_enroll "experiment_name" "alternative1" "alternative2" as assigned_alternative %}
+     {% if assigned_alternative == "alternative1" or assigned_alternative == "alternative2" %}
+        <a href = "register.html">Please register!</a>
+     {% else %}
+        <a href = "register.html">Register now.</a>
+     {% endif %}
+
 You can also enroll users in experiments and find out what alternative they
 are part of from python. To enroll a user in an experiment and show a
 different result based on the alternative:
@@ -251,6 +308,10 @@ alternatively pass a user or session as a keyword argument
 defined in a template but not in the admin. This can be overridden in
 settings.*
 
+After creating an experiment either using the Django admin, or through
+template tags or code, you must enable the experiment in the Django
+admin or manually for it to work. 
+
 
 Goals
 ~~~~~
@@ -265,6 +326,8 @@ Add the goal to our EXPERIMENT_GOALS tuple in setting.py:
 ::
 
     EXPERIMENTS_GOALS = ("registration")
+
+Goals are simple strings that uniquely identify a goal. 
 
 Our registration successful page will contain the goal template tag:
 
@@ -308,24 +371,45 @@ The goal is independent from the experiment as many experiments can all
 have the same goal. The goals are defined in the settings.py file for
 your project.
 
+Retention Goals
+~~~~~~~~~~~~~~~
+
+There are two retention goals (VISIT_PRESENT_COUNT_GOAL and VISIT_NOT_PRESENT_COUNT_GOAL that
+default to '_retention_present_visits' and '_retention_not_present_visits' respectively). To
+use these install the retention middleware. A visit is defined by no page views within
+SESSION_LENGTH hours (defaults to 6).
+
+VISIT_PRESENT_COUNT_GOAL does not trigger until the next visit after the user is enrolled and
+should be used in most cases. VISIT_NOT_PRESENT_COUNT_GOAL triggers on the first visit after
+enrollment and should be used in situations where the user isn't present when being enrolled
+(for example when sending an email). Both goals are tracked for all experiments so take care
+to only use one when interpreting the results.
+
 Confirming Human
 ~~~~~~~~~~~~~~~~
 
 The framework can distinguish between humans and bots. By including
 
 ::
+    {% load experiments %}
 
-    {% include "experiments/confirm_human.html" %}
+    {% experiments_confirm_human %}
 
 at some point in your code (we recommend you put it in your base.html
 file), unregistered users will then be confirmed as human. This can be
 quickly overridden in settings, but be careful - bots can really mess up
 your results!
 
+If you want to customize the confirm human code you can change the
+CONFIRM_HUMAN_SESSION_KEY setting and manage setting the value yourself.
+Note that you need to call confirm_human on the participant when they
+become confirmed as well as setting session[CONFIRM_HUMAN_SESSION_KEY]
+equal to True.
+
 Managing Experiments
 --------------------
 
-Experiments can be managed in the django admin dashboard (/admin/experiments by
+Experiments can be managed in the Django admin (/admin/experiments/experiment/ by
 default).
 
 The States
@@ -350,8 +434,8 @@ expose everyone to it. For example, we could specify to run the result
 to 10% of our users, or only to staff.
 
 
-All Settings
-------------
+Settings
+--------
 
 ::
 

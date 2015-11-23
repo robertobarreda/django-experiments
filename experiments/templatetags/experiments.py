@@ -5,6 +5,8 @@ from django.core.urlresolvers import reverse
 
 from experiments.utils import participant
 from experiments.manager import experiment_manager
+from experiments import conf
+
 from uuid import uuid4
 
 register = template.Library()
@@ -13,6 +15,12 @@ register = template.Library()
 @register.inclusion_tag('experiments/goal.html')
 def experiment_goal(goal_name):
     return {'url': reverse('experiment_goal', kwargs={'goal_name': goal_name, 'cache_buster': uuid4()})}
+
+
+@register.inclusion_tag('experiments/confirm_human.html', takes_context=True)
+def experiments_confirm_human(context):
+    request = context.get('request')
+    return {'confirmed_human': request.session.get(conf.CONFIRM_HUMAN_SESSION_KEY, False)}
 
 
 class ExperimentNode(template.Node):
@@ -24,7 +32,7 @@ class ExperimentNode(template.Node):
         self.user_variable = user_variable
 
     def render(self, context):
-        experiment = experiment_manager.get(self.experiment_name, None)
+        experiment = experiment_manager.get_experiment(self.experiment_name)
         if experiment:
             experiment.ensure_alternative_exists(self.alternative, self.weight)
 
@@ -32,14 +40,12 @@ class ExperimentNode(template.Node):
         if self.user_variable:
             auth_user = self.user_variable.resolve(context)
             user = participant(user=auth_user)
-            switch_key = auth_user
         else:
             request = context.get('request', None)
             user = participant(request)
-            switch_key = request
 
         # Should we render?
-        if user.is_enrolled(self.experiment_name, self.alternative, switch_key):
+        if user.is_enrolled(self.experiment_name, self.alternative):
             response = self.node_list.render(context)
         else:
             response = ""
@@ -95,8 +101,10 @@ def experiment(parser, token):
     return ExperimentNode(node_list, experiment_name, alternative, weight, user_variable)
 
 
-@register.simple_tag(takes_context=True)
-def visit(context):
-    request = context.get('request', None)
-    participant(request).visit()
-    return ""
+@register.assignment_tag(takes_context=True)
+def experiment_enroll(context, experiment_name, *alternatives, **kwargs):
+    if 'user' in kwargs:
+        user = participant(user=kwargs['user'])
+    else:
+        user = participant(request=context.get('request', None))
+    return user.enroll(experiment_name, list(alternatives))

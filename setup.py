@@ -1,6 +1,6 @@
-import re
 from distutils.core import setup
 from setuptools import find_packages
+import re
 
 # http://bugs.python.org/issue15881
 try:
@@ -33,18 +33,17 @@ def parse_dependency_links(file_name):
     return dependency_links
 
 
-setup(
-    name='django-experiments',
-    version='0.3.5b',
-    description='Python Django AB Testing Framework',
-    author='Chris Villa, Roberto Barreda',
-    author_email='chris@mixcloud.com, roberto.barreda@gmail.com',
-    url='https://github.com/robertobarreda/django-experiments',
-    packages=find_packages(exclude=["example"]),
-    include_package_data=True,
-    license="MIT license, see LICENSE file",
-    install_requires=parse_requirements('requirements.txt'),
-    dependency_links=parse_dependency_links('requirements.txt'),
-    long_description=open('README.rst').read(),
-    test_suite="testrunner.runtests",
+setup(name='django-experiments',
+      version='1.1.2.waffle',
+      description='Python Django AB Testing Framework',
+      author='Mixcloud, Roberto Barreda',
+      author_email='technical@mixcloud.com, roberto.barreda@gmail.com',
+      url='https://github.com/robertobarreda/django-experiments',
+      packages=find_packages(exclude=["example_project"]),
+      include_package_data=True,
+      license="MIT license, see LICENSE file",
+      install_requires=parse_requirements('requirements.txt'),
+      dependency_links=parse_dependency_links('requirements.txt'),
+      long_description=open('README.rst').read(),
+      test_suite="testrunner.runtests",
 )

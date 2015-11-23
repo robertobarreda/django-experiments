@@ -3,6 +3,7 @@ import sys
 
 from django.conf import settings
 
+import django
 
 def runtests():
     test_dir = os.path.dirname(os.path.abspath(__file__))
@@ -27,13 +28,21 @@ def runtests():
                         'django.contrib.admin',
                         'waffle',
                         'experiments',),
-        ROOT_URLCONF='experiments.urls',
+        ROOT_URLCONF='experiments.tests.urls',
+        MIDDLEWARE_CLASSES = (
+            'django.contrib.sessions.middleware.SessionMiddleware',
+            'django.middleware.csrf.CsrfViewMiddleware',
+            'django.contrib.auth.middleware.AuthenticationMiddleware',
+            'django.contrib.auth.middleware.SessionAuthenticationMiddleware',
+        ),
     )
+    django.setup()
+
 
     from django.test.utils import get_runner
     TestRunner = get_runner(settings)
     test_runner = TestRunner(verbosity=1, failfast=False)
-    failures = test_runner.run_tests(['experiments.tests', ])
+    failures = test_runner.run_tests(['experiments', ])
     sys.exit(bool(failures))
 
 
